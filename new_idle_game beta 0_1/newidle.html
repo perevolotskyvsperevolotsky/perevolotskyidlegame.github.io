@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Cyber Idle Clicker</title>
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:Arial;user-select:none}
+body{height:100vh;display:flex;color:#fff;overflow:hidden;background:#000}
+body.neon{background:#001f1f}
+canvas{position:fixed;inset:0;z-index:0}
+
+/* UI */
+.sidebar{
+width:320px;padding:15px;
+background:rgba(0,0,0,.55);
+backdrop-filter:blur(10px);
+z-index:2;overflow:auto
+}
+
+.panel{margin-bottom:20px}
+
+.upgrade{
+padding:10px;margin-bottom:8px;border-radius:10px;
+background:rgba(255,255,255,.08);
+cursor:pointer;transition:.2s
+}
+.upgrade.affordable{box-shadow:0 0 12px #0f0}
+.upgrade.expensive{opacity:.4}
+.upgrade:hover{transform:translateX(4px)}
+
+.main{
+flex:1;display:flex;flex-direction:column;
+align-items:center;justify-content:center;z-index:2
+}
+
+.score{text-align:center;font-size:18px;margin-bottom:10px}
+
+.btn{
+width:200px;height:200px;border-radius:50%;
+border:6px solid currentColor;
+background:radial-gradient(circle,#ff0,#f0f);
+font-size:26px;color:white;
+cursor:pointer;box-shadow:0 0 40px currentColor
+}
+.btn:active{transform:scale(.93)}
+
+/* === ДЕРЕВО НАВЫКОВ === */
+.tree{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.skill{
+padding:10px;text-align:center;
+border-radius:10px;
+background:rgba(255,255,255,.1);
+cursor:pointer;transition:.2s
+}
+.skill.locked{opacity:.3;cursor:not-allowed}
+.skill.available{box-shadow:0 0 12px #0ff}
+.skill.taken{background:#0a0}
+
+/* Boss */
+.boss{
+margin-top:10px;width:300px;
+background:rgba(0,0,0,.5);
+padding:10px;border-radius:10px;text-align:center
+}
+.hpbar{height:10px;background:#300;border-radius:5px;overflow:hidden}
+.hp{height:100%;background:#f00;width:100%;transition:.3s}
+
+.popup{
+position:fixed;top:20px;right:20px;
+padding:10px;border-radius:10px;
+background:rgba(0,0,0,.7);
+box-shadow:0 0 15px #0ff;
+animation:fade 2s forwards;z-index:10
+}
+@keyframes fade{to{opacity:0;transform:translateY(-20px)}}
+</style>
+</head>
+
+<body class="neon">
+<canvas id="bg"></canvas>
+
+<div class="sidebar">
+
+<div class="panel">
+<h3>АПГРЕЙДЫ</h3>
+
+<div class="upgrade" id="up1" onclick="buyUpgrade(1)">
+🖱 +1 CPS (<span id="price1">20</span>)
+</div>
+<div class="upgrade" id="up2" onclick="buyUpgrade(2)">
+⚙ +5 CPS (<span id="price2">120</span>)
+</div>
+<div class="upgrade" id="up3" onclick="buyUpgrade(3)">
+🚀 +20 CPS (<span id="price3">600</span>)
+</div>
+</div>
+
+<div class="panel">
+<h3>НАВЫКИ 🧠 (<span id="sp">0</span>)</h3>
+<div class="tree">
+<div class="skill available" id="s1" onclick="learnSkill('damage')">💥 Урон +1</div>
+<div class="skill locked" id="s2" onclick="learnSkill('crit')">🎯 Крит +5%</div>
+<div class="skill locked" id="s3" onclick="learnSkill('combo')">⚡ Комбо x2</div>
+<div class="skill locked" id="s4" onclick="learnSkill('reward')">💰 +50%</div>
+</div>
+</div>
+
+<div class="panel">
+<h3>БОСС</h3>
+<div class="upgrade" onclick="spawnBoss()">👹 Призвать</div>
+</div>
+
+</div>
+
+<div class="main">
+<div class="score">
+Очки: <span id="score">0</span><br>
+CPS: <span id="cps">0</span><br>
+Урон: <span id="dmg">1</span>
+</div>
+
+<button class="btn" id="btn">КЛИК</button>
+
+<div class="boss" id="bossBox" style="display:none">
+<b id="bossName"></b><br>
+HP: <span id="bossHp"></span>
+<div class="hpbar"><div class="hp" id="hpBar"></div></div>
+</div>
+</div>
+
+<script>
+/* === СОСТОЯНИЕ === */
+let score=0,cps=0,damage=1,crit=0.1,combo=1,reward=1;
+let skillPoints=0;
+
+/* апгрейды с РАЗНЫМИ формулами */
+const upgrades={
+1:{cps:1,price:20,type:'linear',k:15},
+2:{cps:5,price:120,type:'exp',k:1.5},
+3:{cps:20,price:600,type:'power',k:1.25,level:1}
+};
+
+const skills={
+damage:{taken:false,need:null},
+crit:{taken:false,need:'damage'},
+combo:{taken:false,need:'crit'},
+reward:{taken:false,need:'combo'}
+};
+
+let boss=null;
+
+/* === UI === */
+const scoreEl=document.getElementById('score');
+const cpsEl=document.getElementById('cps');
+const dmgEl=document.getElementById('dmg');
+const spEl=document.getElementById('sp');
+const btn=document.getElementById('btn');
+
+/* === КЛИК === */
+btn.onclick=e=>{
+let dmg=damage;
+if(Math.random()<crit){dmg*=3;popup("💥 CRIT")}
+score+=dmg*combo;
+if(boss)hitBoss(dmg);
+updateUI();
+};
+
+/* === CPS === */
+setInterval(()=>{
+score+=cps;
+if(boss)hitBoss(cps);
+updateUI();
+},1000);
+
+/* === АПГРЕЙДЫ === */
+function buyUpgrade(id){
+const u=upgrades[id];
+if(score<u.price)return;
+score-=u.price;
+cps+=u.cps;
+
+/* формулы роста */
+if(u.type==='linear') u.price+=u.k;
+if(u.type==='exp') u.price=Math.floor(u.price*u.k);
+if(u.type==='power'){u.level++;u.price=Math.floor(u.price*Math.pow(u.k,u.level))}
+
+document.getElementById('price'+id).textContent=u.price;
+popup("⬆ Улучшено");
+updateUI();
+}
+
+/* === НАВЫКИ === */
+function learnSkill(s){
+const sk=skills[s];
+if(sk.taken)return;
+if(sk.need && !skills[sk.need].taken)return;
+if(skillPoints<1)return;
+
+skillPoints--;
+sk.taken=true;
+
+if(s==='damage')damage+=1;
+if(s==='crit')crit+=0.05;
+if(s==='combo')combo=2;
+if(s==='reward')reward=1.5;
+
+popup("🧠 Навык изучен");
+updateUI();
+}
+
+/* === БОСС === */
+function spawnBoss(){
+boss={name:"КИБЕР-ДЕМОН",hp:5000,max:5000};
+document.getElementById('bossBox').style.display='block';
+updateBoss();
+}
+
+function hitBoss(dmg){
+boss.hp-=dmg;
+if(boss.hp<=0){
+popup("🏆 БОСС ПОВЕРЖЕН!");
+score+=2000*reward;
+skillPoints+=1;
+boss=null;
+document.getElementById('bossBox').style.display='none';
+}
+updateBoss();
+}
+
+function updateBoss(){
+if(!boss)return;
+document.getElementById('bossName').textContent=boss.name;
+document.getElementById('bossHp').textContent=Math.max(0,Math.floor(boss.hp));
+document.getElementById('hpBar').style.width=(boss.hp/boss.max*100)+"%";
+}
+
+/* === UI UPDATE === */
+function updateUI(){
+scoreEl.textContent=Math.floor(score);
+cpsEl.textContent=cps;
+dmgEl.textContent=damage;
+spEl.textContent=skillPoints;
+
+/* апгрейды */
+for(const id in upgrades){
+const el=document.getElementById('up'+id);
+el.classList.toggle('affordable',score>=upgrades[id].price);
+el.classList.toggle('expensive',score<upgrades[id].price);
+}
+
+/* дерево навыков */
+for(const k in skills){
+const el=document.getElementById('s'+Object.keys(skills).indexOf(k));
+}
+Object.keys(skills).forEach((k,i)=>{
+const el=document.getElementById('s'+(i+1));
+el.classList.toggle('taken',skills[k].taken);
+el.classList.toggle(
+'available',
+!skills[k].taken && (!skills[k].need || skills[skills[k].need].taken)
+);
+el.classList.toggle(
+'locked',
+skills[k].need && !skills[skills[k].need].taken
+);
+});
+}
+
+/* === POPUP === */
+function popup(t){
+const d=document.createElement('div');
+d.className='popup';d.textContent=t;
+document.body.appendChild(d);
+setTimeout(()=>d.remove(),2000);
+}
+
+/* === ФОН === */
+const c=document.getElementById('bg'),ctx=c.getContext('2d');
+function resize(){c.width=innerWidth;c.height=innerHeight}
+addEventListener('resize',resize);resize();
+let cols=Array(120).fill(0);
+function draw(){
+ctx.fillStyle='rgba(0,0,0,.2)';
+ctx.fillRect(0,0,c.width,c.height);
+ctx.fillStyle='#0ff';
+cols.forEach((y,i)=>{
+ctx.fillText(Math.random()>0.5?'0':'1',i*20,y);
+cols[i]=y>c.height?0:y+20;
+});
+requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>
